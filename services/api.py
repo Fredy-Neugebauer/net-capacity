@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from common import connect_db
 
 app=FastAPI(title='NetCapacity API',version='0.1.0')
+Instrumentator().instrument(app).expose(app)
 @app.get('/health')
 def health():
     try:

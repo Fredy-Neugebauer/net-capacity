@@ -1,0 +1,81 @@
+# Stack de métricas do NetCapacity (roda na mesma EC2 da aplicação).
+# Uso (na EC2, em /opt/netcapacity):
+#   sudo docker compose -f observability/docker-compose.yml --env-file observability/.env up -d
+# Requer que a aplicação já esteja no ar (rede "netcapacity_default").
+name: netcapacity-obs
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d      # teste: guarda só 7 dias
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"                  # só acessível de dentro da EC2
+    networks: [app]
+    restart: unless-stopped
+    logging: *logging
+
+  node-exporter:                              # métricas da instância (CPU, RAM, disco, rede)
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks: [app]
+    restart: unless-stopped
+    logging: *logging
+
+  cadvisor:                                   # métricas de cada container
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [app]
+    restart: unless-stopped
+    logging: *logging
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # usadas no provisionamento do datasource PostgreSQL (RDS)
+      RDS_HOST: ${RDS_HOST}
+      RDS_USER: ${RDS_USER:-netcapacity}
+      RDS_PASSWORD: ${RDS_PASSWORD}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+    networks: [app]
+    restart: unless-stopped
+    logging: *logging
+
+networks:
+  app:
+    name: netcapacity_default    # rede criada pelo deploy/docker-compose.aws.yml
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:
